@@ -1,0 +1,24 @@
+# CMakeLists_bad.txt — intentionally WRONG build config for Turin target
+# Turin Latency Analyzer will flag:
+#   [CRITICAL] No -march=znver5 — compiler targets SSE2 baseline
+#   [CRITICAL] -O0 debug build shipped
+#   [MAJOR]    No -O3
+#   [MINOR]    No -flto
+
+cmake_minimum_required(VERSION 3.20)
+project(RiskEngine CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+
+add_executable(risk_engine
+    risk_engine_bad.cpp
+)
+
+# BAD: debug flags in a "release" build
+target_compile_options(risk_engine PRIVATE
+    -O0            # catastrophic for latency — disables ALL optimisation
+    -g             # debug symbols — fine, but not with -O0
+    # Missing: -march=znver5, -mavx512f, -O3, -flto, -ffast-math
+)
+
+target_include_directories(risk_engine PRIVATE .)

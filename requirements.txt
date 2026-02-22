@@ -1,0 +1,10 @@
+# Turin Latency Analyzer — Python dependencies
+# The core tool is stdlib-only. This file is a no-op placeholder
+# so the CI pip install step succeeds without errors.
+# Add optional dependencies here if you extend the tool.
+
+# Optional: rich terminal output (uncomment to enable)
+# rich>=13.0
+
+# Optional: GitLab API for posting MR comments directly
+# python-gitlab>=3.0
