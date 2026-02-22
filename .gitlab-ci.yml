@@ -1,0 +1,153 @@
+# .gitlab-ci.yml — AMD Turin Latency Analyzer pipeline
+#
+# This pipeline:
+#   1. Runs the Turin latency checker on all C++ files changed in the MR
+#   2. Produces a GitLab Code Quality report (inline MR annotations)
+#   3. Produces a full JSON report and Markdown summary as artifacts
+#   4. Fails the pipeline if CRITICAL or MAJOR findings exist
+#
+# Requirements:
+#   - Python 3.9+ available in the runner image
+#   - The runner targets AMD Turin hardware (or a compatible environment)
+#
+# Artifact retention:
+#   - Code Quality report: 30 days
+#   - Full JSON/Markdown: 7 days
+
+stages:
+  - lint
+  - turin-check
+
+# ---------------------------------------------------------------------------
+# Stage: lint — basic Python syntax check for the analyzer itself
+# ---------------------------------------------------------------------------
+lint-analyzer:
+  stage: lint
+  image: python:3.11-slim
+  script:
+    - python3 -m py_compile turin_check.py
+    - python3 -m py_compile turin_analyzer/analyzer.py
+    - python3 -m py_compile turin_analyzer/reporter.py
+    - find turin_analyzer/checks -name "*.py" -exec python3 -m py_compile {} \;
+    - echo "Syntax OK"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'
+
+# ---------------------------------------------------------------------------
+# Stage: turin-check — main latency analysis
+#
+# In an MR pipeline this runs on the CHANGED files only.
+# On main/master it scans the full src/ tree.
+# ---------------------------------------------------------------------------
+.turin-check-base:
+  stage: turin-check
+  image: python:3.11-slim
+  variables:
+    FAIL_ON: "major"          # Fail pipeline on CRITICAL or MAJOR findings
+    MIN_SEVERITY: "minor"     # Report down to MINOR
+    OUTPUT_DIR: "reports"
+  before_script:
+    - pip install --quiet --no-cache-dir -r requirements.txt 2>/dev/null || true
+    - mkdir -p "$OUTPUT_DIR"
+
+# MR pipeline: check only changed C++ files
+turin-check-mr:
+  extends: .turin-check-base
+  script:
+    # Get list of C++ files changed vs target branch
+    - |
+      CHANGED=$(git diff --name-only "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}...HEAD" \
+                  -- '*.cpp' '*.cc' '*.cxx' '*.c' '*.hpp' '*.h' '*.hxx' \
+                     'CMakeLists.txt' '*.cmake' 'Makefile' '*.mk' \
+                | tr '\n' ' ')
+      echo "Changed files: $CHANGED"
+
+      if [ -z "$CHANGED" ]; then
+        echo "No C++ or build files changed — skipping Turin check"
+        echo "[]" > "${OUTPUT_DIR}/gl-code-quality.json"
+        exit 0
+      fi
+
+      # Run analyzer on changed files — GitLab Code Quality format
+      python3 turin_check.py \
+          --format gitlab \
+          --output "${OUTPUT_DIR}/gl-code-quality.json" \
+          --min-severity "$MIN_SEVERITY" \
+          --fail-on "$FAIL_ON" \
+          $CHANGED
+  artifacts:
+    name: "turin-latency-report-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 30 days
+    reports:
+      codequality: reports/gl-code-quality.json
+    paths:
+      - reports/gl-code-quality.json
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# Full-tree scan on main/master push
+turin-check-full:
+  extends: .turin-check-base
+  script:
+    # Discover all C++ source directories (adjust to your project structure)
+    - |
+      SRC_DIRS="${SCAN_DIRS:-src/ include/ lib/}"
+
+      # Full JSON report
+      python3 turin_check.py \
+          --format json \
+          --output "${OUTPUT_DIR}/turin-full-report.json" \
+          --min-severity "$MIN_SEVERITY" \
+          --fail-on none \
+          $SRC_DIRS
+
+      # GitLab Code Quality (for branch pipeline dashboard)
+      python3 turin_check.py \
+          --format gitlab \
+          --output "${OUTPUT_DIR}/gl-code-quality.json" \
+          --min-severity "$MIN_SEVERITY" \
+          --fail-on "$FAIL_ON" \
+          $SRC_DIRS
+
+      # Markdown summary
+      python3 turin_check.py \
+          --format markdown \
+          --output "${OUTPUT_DIR}/turin-summary.md" \
+          --min-severity "$MIN_SEVERITY" \
+          --fail-on none \
+          $SRC_DIRS
+  artifacts:
+    name: "turin-latency-full-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 7 days
+    reports:
+      codequality: reports/gl-code-quality.json
+    paths:
+      - reports/
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'
+
+# ---------------------------------------------------------------------------
+# Optional: scheduled nightly full scan with stricter thresholds
+# ---------------------------------------------------------------------------
+turin-check-nightly:
+  extends: .turin-check-base
+  variables:
+    FAIL_ON: "minor"        # Stricter threshold in nightly
+    MIN_SEVERITY: "info"
+  script:
+    - |
+      python3 turin_check.py \
+          --format gitlab \
+          --output "${OUTPUT_DIR}/gl-code-quality.json" \
+          --min-severity info \
+          --fail-on minor \
+          ${SCAN_DIRS:-src/ include/ lib/}
+  artifacts:
+    expire_in: 7 days
+    reports:
+      codequality: reports/gl-code-quality.json
+    paths:
+      - reports/gl-code-quality.json
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'

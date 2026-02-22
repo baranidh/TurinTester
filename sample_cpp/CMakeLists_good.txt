@@ -1,0 +1,52 @@
+# CMakeLists_good.txt — OPTIMISED build config for AMD Turin (Zen 5)
+# All Turin-specific flags enabled. Turin Latency Analyzer will PASS this.
+
+cmake_minimum_required(VERSION 3.20)
+project(RiskEngine CXX)
+
+set(CMAKE_CXX_STANDARD 20)    # Required for [[likely]]/[[unlikely]]
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ---------------------------------------------------------------------------
+# AMD Turin / Zen 5 compiler flags
+# ---------------------------------------------------------------------------
+set(TURIN_FLAGS
+    -march=znver5              # Full Zen 5 ISA: AVX-512, CLDEMOTE, MOVDIRI
+    -O3                        # Full optimisation
+    -mavx512f                  # AVX-512 Foundation
+    -mavx512bw                 # AVX-512 Byte/Word (for FIX byte scanning)
+    -mavx512vl                 # AVX-512 Vector Length extensions
+    -mavx512vnni               # Vector Neural Network Instructions
+    -mavx512vbmi               # Vector Byte Manipulation
+    -ffast-math                # Allow SIMD FP reassociation
+    -funroll-loops             # Loop unrolling for FIX parser
+    -fno-omit-frame-pointer    # Keep for perf / VTune profiling
+    -flto=auto                 # Link-Time Optimisation
+    -fprofile-use              # Profile-Guided Optimisation (PGO phase 2)
+    -fprofile-correction       # Handle PGO counter inconsistencies
+)
+
+# ---------------------------------------------------------------------------
+# Executable
+# ---------------------------------------------------------------------------
+add_executable(risk_engine
+    risk_engine_bad.cpp  # would be risk_engine.cpp in real project
+)
+
+target_compile_options(risk_engine PRIVATE ${TURIN_FLAGS})
+target_link_options(risk_engine PRIVATE -flto=auto)
+
+target_include_directories(risk_engine PRIVATE .)
+target_link_libraries(risk_engine PRIVATE numa)   # libnuma for NUMA allocation
+
+# ---------------------------------------------------------------------------
+# Sanitiser build (CI — separate target, NOT for latency measurement)
+# ---------------------------------------------------------------------------
+add_executable(risk_engine_asan
+    risk_engine_bad.cpp
+)
+target_compile_options(risk_engine_asan PRIVATE
+    -O1 -g -fsanitize=address,undefined
+)
+target_link_options(risk_engine_asan PRIVATE -fsanitize=address,undefined)
+target_include_directories(risk_engine_asan PRIVATE .)
