@@ -16,8 +16,8 @@ Usage
   # GitLab Code Quality output
   python3 turin_check.py src/ --format gitlab --output gl-code-quality.json
 
-  # Exit with non-zero code if CRITICAL/MAJOR found (for CI gate)
-  python3 turin_check.py src/ --fail-on major
+  # Print loud warnings for CRITICAL/MAJOR (pipeline never fails)
+  python3 turin_check.py src/
 
   # Only report CRITICAL
   python3 turin_check.py src/ --min-severity critical
@@ -72,11 +72,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--fail-on",
         choices=["critical", "major", "minor", "info", "none"],
-        default="major",
+        default="none",
         metavar="SEVERITY",
         help=(
             "Exit with code 1 if any finding at or above this severity exists. "
-            "Use 'none' to never fail (default: major)"
+            "Use 'none' to never fail (default: none)"
         ),
     )
     p.add_argument(
@@ -164,24 +164,57 @@ def main() -> int:
     if args.output and args.format != "console":
         to_console(result)
 
-    # Exit code
-    if args.fail_on == "none":
-        return 0
+    # Severity banner — always printed to stderr so it appears in CI logs
+    # regardless of output format. Pipeline never fails; findings are advisory.
+    _print_severity_banners(result)
 
-    fail_sev = Severity(args.fail_on)
-    fail_order = {
-        Severity.CRITICAL: 0,
-        Severity.MAJOR:    1,
-        Severity.MINOR:    2,
-        Severity.INFO:     3,
-    }
-    threshold = fail_order[fail_sev]
-
-    for finding in result.all_findings:
-        if fail_order[finding.severity] <= threshold:
-            return 1
+    # Honour --fail-on if the caller explicitly opted in (default: none)
+    if args.fail_on != "none":
+        fail_sev = Severity(args.fail_on)
+        fail_order = {
+            Severity.CRITICAL: 0,
+            Severity.MAJOR:    1,
+            Severity.MINOR:    2,
+            Severity.INFO:     3,
+        }
+        threshold = fail_order[fail_sev]
+        for finding in result.all_findings:
+            if fail_order[finding.severity] <= threshold:
+                return 1
 
     return 0
+
+
+def _print_severity_banners(result: "AnalysisResult") -> None:
+    """Print loud CRITICAL/MAJOR/MINOR WARNING banners to stderr."""
+    from turin_analyzer.checks.base import Severity
+
+    counts: dict = {}
+    for f in result.all_findings:
+        counts[f.severity] = counts.get(f.severity, 0) + 1
+
+    banners = [
+        (Severity.CRITICAL, "CRITICAL WARNING"),
+        (Severity.MAJOR,    "MAJOR WARNING"),
+        (Severity.MINOR,    "MINOR WARNING"),
+    ]
+
+    printed_any = False
+    for sev, label in banners:
+        n = counts.get(sev, 0)
+        if n:
+            bar = "!" * 60
+            print(f"\n{bar}", file=sys.stderr)
+            print(f"  *** {label} ***  {n} {sev.value} Turin finding(s) detected!", file=sys.stderr)
+            print(f"{bar}", file=sys.stderr)
+            printed_any = True
+
+    if printed_any:
+        print(
+            "\n  The pipeline continues — findings above are advisory.\n"
+            "  Review the Code Quality report in the MR for details.\n",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

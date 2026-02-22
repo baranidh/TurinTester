@@ -4,7 +4,8 @@
 #   1. Runs the Turin latency checker on all C++ files changed in the MR
 #   2. Produces a GitLab Code Quality report (inline MR annotations)
 #   3. Produces a full JSON report and Markdown summary as artifacts
-#   4. Fails the pipeline if CRITICAL or MAJOR findings exist
+#   4. Prints CRITICAL WARNING / MAJOR WARNING / MINOR WARNING banners to logs
+#      — the pipeline NEVER fails due to findings; they are advisory only
 #
 # Requirements:
 #   - Python 3.9+ available in the runner image
@@ -44,7 +45,7 @@ lint-analyzer:
   stage: turin-check
   image: python:3.11-slim
   variables:
-    FAIL_ON: "major"          # Fail pipeline on CRITICAL or MAJOR findings
+    FAIL_ON: "none"           # Pipeline never fails; warnings are advisory only
     MIN_SEVERITY: "minor"     # Report down to MINOR
     OUTPUT_DIR: "reports"
   before_script:
@@ -133,7 +134,7 @@ turin-check-full:
 turin-check-nightly:
   extends: .turin-check-base
   variables:
-    FAIL_ON: "minor"        # Stricter threshold in nightly
+    FAIL_ON: "none"         # Advisory only — nightly shows all severities
     MIN_SEVERITY: "info"
   script:
     - |
@@ -141,7 +142,7 @@ turin-check-nightly:
           --format gitlab \
           --output "${OUTPUT_DIR}/gl-code-quality.json" \
           --min-severity info \
-          --fail-on minor \
+          --fail-on none \
           ${SCAN_DIRS:-src/ include/ lib/}
   artifacts:
     expire_in: 7 days
